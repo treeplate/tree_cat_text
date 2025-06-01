@@ -18,8 +18,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.0+1
 
 environment:
-
-  sdk: '>=2.10.0 <3.0.0'
+  sdk: '^3.0.0-85.0.dev'
 
 dependencies:
   flutter:
@@ -48,8 +47,6 @@ flutter:
   uses-material-design: true
 
   # To add assets to your application, add an assets section, like this:
-  assets:
-    - username.tct
 
   #   - images/a_dot_ham.jpeg
 

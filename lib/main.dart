@@ -1,10 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
-
-String username = "TODO";
 
 void main() async {
   runApp(MyApp());
@@ -22,31 +21,92 @@ class MyApp extends StatelessWidget {
 }
 
 class MyHomePage extends StatefulWidget {
-  MyHomePage({Key key}) : super(key: key);
+  MyHomePage({super.key});
 
   @override
   State<StatefulWidget> createState() => MyHomePageState();
 }
 
 class MyHomePageState extends State<MyHomePage> {
+  File? file;
+  Directory dir = Directory.current;
+
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Tree Cat Text"),
-      ),
-      body: ListView(
-        children: [
-          /*
-          Editor('/Users/$username/.tct'),
+        title: Text("Tree Dog Text"),
+        actions: [
           TextButton(
-            child: Text("Open File"),
-            onPressed: () => setState(() {}),
-          ),
-          */
-          Editor(
-              '/Users/$username/${(File('/Users/$username/.tct')..createSync()).readAsStringSync()}'),
+            onPressed: () {
+              setState(() {
+                file = null;
+              });
+            },
+            child: Text('Open File'),
+          )
         ],
       ),
+      body: file == null
+          ? FilePicker(dir, (file2) {
+              setState(() {
+                file = file2;
+                dir = file2.parent;
+              });
+            })
+          : Editor(file!.path),
+    );
+  }
+}
+
+class FilePicker extends StatefulWidget {
+  final Directory startDir;
+  final void Function(File) callback;
+  const FilePicker(this.startDir, this.callback, {super.key});
+
+  @override
+  State<FilePicker> createState() => _FilePickerState();
+}
+
+class _FilePickerState extends State<FilePicker> {
+  late Directory dir;
+
+  @override
+  void initState() {
+    dir = widget.startDir;
+    super.initState();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      children: [
+        Text("Directory ${dir.path}"),
+        TextButton(
+          onPressed: () {
+            setState(() {
+              dir = dir.parent;
+            });
+          },
+          child: Text('.. (directory)'),
+        ),
+        ...(dir.listSync()..sort((a, b) => a.path.compareTo(b.path))).map(
+          (e) => e is File
+              ? TextButton(
+                  onPressed: () {
+                    widget.callback(e);
+                  },
+                  child: Text('${e.uri.pathSegments.last} (file)'),
+                )
+              : TextButton(
+                  onPressed: () {
+                    setState(() {
+                      dir = e as Directory;
+                    });
+                  },
+                  child: Text('${(e.path.split('/')).last} (directory)'),
+                ),
+        )
+      ],
     );
   }
 }
@@ -76,15 +136,19 @@ class _EditorState extends State<Editor> {
       (Timer x) {
         if (mounted) {
           setState(() {
-            _text = "Load...";
-            try {
-              if (File(filename).existsSync()) {
-                _text = File(filename).readAsStringSync();
-              } else {
-                File(filename).createSync();
+            if (running == null) {
+              _text = "(loading file some more...)";
+              try {
+                if (File(filename).existsSync()) {
+                  _text = File(filename).readAsStringSync();
+                } else {
+                  File(filename).createSync();
+                }
+              } on FileSystemException catch (e, st) {
+                print("======\n$e\n$st\n=========");
               }
-            } on FileSystemException catch (e, st) {
-              print("======\n$e\n$st\n=========");
+            } else {
+              running!.stdin.write('r\n');
             }
           });
         }
@@ -92,12 +156,13 @@ class _EditorState extends State<Editor> {
     );
   }
 
-  String _text = "Loading...";
+  String _text = "(loading file...)";
   int cursorPos = 0;
   String get filename => widget.filename;
-  void _handleKeyEvent(RawKeyEvent event) {
+  Process? running;
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
     try {
-      if (event is RawKeyDownEvent) {
+      if (event is KeyDownEvent) {
         setState(() {
           if (event.logicalKey == LogicalKeyboardKey.arrowLeft &&
               cursorPos > 0) {
@@ -154,15 +219,43 @@ class _EditorState extends State<Editor> {
               cursorPos++;
             }
             //print(_text[cursorPos]);
+          } else if (event.logicalKey == LogicalKeyboardKey.f5) {
+            if (running != null) {
+              running!.stdin.write('R\n');
+              _text = 'Restarting process...';
+              return;
+            }
+            List<String> command =
+                File(File(filename).parent.path + '/.tct/run.txt')
+                    .readAsLinesSync();
+            Process.start(command.first, command.skip(1).toList(),
+                    workingDirectory: File(filename).parent.path)
+                .then(
+              (value) {
+                running = value;
+                _text = 'Process started.';
+                running!.stdout.listen((event) {
+                  String t = utf8.decode(event);
+                  _text += t;
+                });
+                running!.stderr.listen((event) {
+                  _text += utf8.decode(event);
+                });
+                running!.exitCode.then((i) {
+                  running = null;
+                });
+              },
+            );
           } else if (event.logicalKey != LogicalKeyboardKey.arrowLeft &&
               event.logicalKey != LogicalKeyboardKey.arrowRight &&
               event.logicalKey != LogicalKeyboardKey.arrowUp &&
               event.logicalKey != LogicalKeyboardKey.arrowDown &&
               !(event.logicalKey == LogicalKeyboardKey.backspace ||
                   event.logicalKey == LogicalKeyboardKey.delete)) {
-            _text = _text.replaceRange(cursorPos, cursorPos, event.character);
-            cursorPos++;
-          }
+            _text =
+                _text.replaceRange(cursorPos, cursorPos, event.character ?? '');
+            cursorPos += event.character == null ? 0 : 1;
+          } else {}
         });
         File file = File(filename);
         file.writeAsStringSync(_text);
@@ -170,6 +263,7 @@ class _EditorState extends State<Editor> {
     } on NoSuchMethodError catch (e, st) {
       print("=====\ncaught error $e\n$st\n=======");
     }
+    return KeyEventResult.handled;
   }
 
   final FocusNode _focusNode = FocusNode();
@@ -184,50 +278,34 @@ class _EditorState extends State<Editor> {
       .replaceRange(cursorPos * 2, cursorPos * 2 + 1, "|");
   @override
   Widget build(BuildContext context) {
-    return RawKeyboardListener(
-      focusNode: _focusNode,
-      onKey: _handleKeyEvent,
-      child: AnimatedBuilder(
-        animation: _focusNode,
-        builder: (BuildContext context, Widget child) {
-          if (!_focusNode.hasFocus) {
-            return GestureDetector(
-              onTap: () {
-                FocusScope.of(context).requestFocus(_focusNode);
-                _text = "Load...";
-                cursorPos = 0;
-                try {
-                  if (File(filename).existsSync()) {
-                    _text = File(filename).readAsStringSync();
-                  } else {
-                    File(filename).createSync();
-                  }
-                } on FileSystemException catch (e, st) {
-                  print("======\n$e\n$st\n=========");
-                }
-              },
-              child: Text('Tap to focus'),
-            );
-          }
-          return Padding(
-            padding: const EdgeInsets.all(10.0),
-            child: Container(
-              decoration:
-                  BoxDecoration(border: Border.all(color: Colors.black)),
-              child: ListBody(
-                  children: text
-                      .split("\n")
-                      .map(
-                        (e) => Text(
-                          e,
-                          style: TextStyle(fontFamily: 'RobotoMono'),
-                        ),
-                      )
-                      .toList()),
-            ),
-          );
-        },
-      ),
+    return ListView(
+      children: [
+        Focus(
+          onKeyEvent: _handleKeyEvent,
+          autofocus: true,
+          child: AnimatedBuilder(
+            animation: _focusNode,
+            builder: (BuildContext context, Widget? child) {
+              return Padding(
+                padding: const EdgeInsets.all(10.0),
+                child: Container(
+                  decoration:
+                      BoxDecoration(border: Border.all(color: Colors.black)),
+                  child: ListBody(
+                      children: text.split("\n").map(
+                    (e) {
+                      return Text(
+                        e,
+                        style: TextStyle(fontFamily: 'RobotoMono'),
+                      );
+                    },
+                  ).toList()),
+                ),
+              );
+            },
+          ),
+        )
+      ],
     );
   }
 }
